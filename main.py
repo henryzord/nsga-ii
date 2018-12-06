@@ -1,8 +1,11 @@
 # encoding=utf-8
 
+import copy
+import random
+
 import numpy as np
-import operator as op
-from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt, cm, markers
+from matplotlib.colors import to_hex
 
 __author__ = 'Henry Cagnini'
 
@@ -11,7 +14,9 @@ def a_dominates_b(a, b):
     """
 
     :param a: first solution
+    :type a: numpy.ndarray
     :param b: second solution
+    :type b: numpy.ndarray
     :return: -1 if b dominates a, +1 if the opposite, and 0 if there is no dominance
     """
     a_dominates = any(a > b) and all(a >= b)
@@ -21,52 +26,12 @@ def a_dominates_b(a, b):
     return res
 
 
-def get_fronts(pop):
-    n_individuals, n_objectives = pop.shape
-
-    added = np.zeros(n_individuals)
-    dominated = np.zeros(n_individuals)
-    dominates = [[] for x in xrange(n_individuals)]
-    fronts = []
-
-    cur_front = 0
-
-    for i in xrange(n_individuals):
-        for j in xrange(i+1, n_individuals):
-            res = a_dominates_b(pop[i], pop[j])
-            if res == 1:
-                dominated[j] += 1
-                dominates[i] += [j]
-            elif res == -1:
-                dominated[i] += 1
-                dominates[j] += [i]
-
-    while sum(added) < n_individuals:
-        _where = np.flatnonzero(dominated == 0)
-
-        if len(_where) == 0:
-            break
-
-        added[_where] = 1
-        fronts += [pop[_where]]
-        dominated[_where] = -1
-
-        _chain = set(reduce(op.add, map(lambda x: dominates[x], _where)))
-
-        for k in _chain:
-            dominated[k] -= 1
-
-        cur_front += 1
-
-    return fronts
-    
-
 def crowding_distance_assignment(_set):
     """
     Worst case scenario for this function: O(m * N * log(N)), where m
     is the number of objectives and N the size of population.
 
-    :type set: numpy.ndarray
+    :type _set: numpy.ndarray
     :param _set: An numpy.ndarray with two dimensions, where the first value in the tuple is from the first objective,
         and so on and so forth.
     :return: A list of crowding distances.
@@ -75,66 +40,88 @@ def crowding_distance_assignment(_set):
     n_individuals, n_objectives = _set.shape
     crowd_dists = np.zeros(n_individuals)
 
-    for objective in xrange(n_objectives):
+    for objective in range(n_objectives):
         _set_obj = sorted(_set, key=lambda x: x[objective])
         crowd_dists[[0, -1]] = [np.inf, np.inf]
-        for i in xrange(1, n_individuals-1):
+        for i in range(1, n_individuals-1):
             crowd_dists[i] = crowd_dists[i] + (_set_obj[i+1][objective] - _set_obj[i-1][objective])
 
     return crowd_dists
 
 
-def a_greater_b(rank_a, crowd_dist_a, rank_b, crowd_dist_b):
-    return (rank_a < rank_b) or ((rank_a == rank_b) and (crowd_dist_a > crowd_dist_b))
+def get_fronts(pop):
+    n_individuals, n_objectives = pop.shape
 
+    dominated = np.zeros(n_individuals, dtype=np.int32)
+    dominates = [[] for x in range(n_individuals)]
+    fronts = []
+
+    cur_front = []
+
+    for i in range(n_individuals):
+        for j in range(i + 1, n_individuals):
+            res = a_dominates_b(pop[i], pop[j])
+            if res == 1:  # if solution i dominates solution j
+                dominated[j] += 1  # signals that j is dominated by one solution
+                dominates[i] += [j]  # add j to the list of dominated solutions by i
+            elif res == -1:
+                dominated[i] += 1  # signals that i is dominated by one solution
+                dominates[j] += [i]  # add i to the list of dominated solutions by j
+
+        if dominated[i] == 0:
+            cur_front += [i]
+
+    while len(cur_front) != 0:
+        some_set = []
+
+        for master in cur_front:
+            for slave in dominates[master]:
+                dominated[slave] -= 1
+                if dominated[slave] == 0:
+                    some_set += [slave]
+
+        fronts += [copy.deepcopy(cur_front)]
+        cur_front = some_set
+
+    return fronts
+    
 
 def main():
-    # np.random.seed(3)
+    np.random.seed(5)
+    random.seed(5)
 
-    x_axis = range(10)
+    n_individuals = 50
 
-    n_objectives = 2
-    n_individuals = len(x_axis) * 2
-
-    pop = np.random.random(size=(n_individuals, n_objectives))
+    pop = np.random.random(size=(n_individuals, 2))
+    # pop = np.unique(pop, axis=1)
 
     fronts = get_fronts(pop)
 
-    for j in xrange(pop.shape[0]):
-        plt.text(
-            x=pop[j, 0],
-            y=pop[j, 1],
-            s=str(j)
-        )
+    colors = list(map(to_hex, cm.viridis(np.linspace(0, 1, len(fronts) * 5))[::5]))
+    some_markers = markers.MarkerStyle.markers.keys()
 
-    plt.scatter(pop[:, 0], pop[:, 1], c='red', label='non-front population')
+    fig, ax = plt.subplots()
 
-    for i, front in enumerate(fronts):
-        color = "#%06x" % np.random.randint(0, 0xFFFFFF)
+    # with sorting and plotting
+    for i, (front, color, form) in enumerate(zip(fronts, colors, some_markers)):
+        _sorted = np.argsort(pop[front], axis=0)
 
-        plt.scatter(
-            fronts[i][:, 0],  # X
-            fronts[i][:, 1],  # Y
-            c=color,
-            label='%d-th front' % i
-        )
+        ax.scatter((pop[front])[_sorted, 0], (pop[front])[_sorted, 1], c=color, marker=form, s=45,
+                   label='Front %d' % (i + 1), zorder=1)
+        ax.plot((pop[front])[_sorted, 0], (pop[front])[_sorted, 1], c=color, zorder=0)
 
-        _sorted = np.asarray(sorted(fronts[i], key=lambda x: x[0]))
+    ax.set_xlabel('Objective #1')
+    ax.set_ylabel('Objective #2')
 
-        plt.plot(
-            _sorted[:, 0],  # X
-            _sorted[:, 1],  # Y
-            c=color
-        )
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
 
-        f1_dists = crowding_distance_assignment(fronts[i])
-        print '%d-th front crowding distances:', f1_dists
+    # Put a legend to the right of the current axis
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
 
-    plt.title('Pareto Front')
-    plt.xlabel('objective x')
-    plt.ylabel('objective y')
-    plt.legend(loc='upper left')
+    plt.tight_layout()
     plt.show()
+
 
 if __name__ == '__main__':
     main()
